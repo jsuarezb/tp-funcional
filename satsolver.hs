@@ -1,79 +1,110 @@
 
 import qualified Data.Vector as V
 
+
 type Literal = Int
 type Clause = [Literal]
-type FormCNF = [Clause]
-type Valuation = V.Vector PValue
+type Formula = [Clause]
+type Valuation = V.Vector TruthValue
 
-data PValue = T | F | U
-    deriving(Show)
+data TruthValue = F | U | T deriving (Show, Eq)
 
-pValueNot :: PValue -> PValue
-pValueNot U = U
-pValueNot T = F
-pValueNot F = T
+truthValuetoInt :: TruthValue -> Int
+truthValuetoInt F = -1
+truthValuetoInt U = 0
+truthValuetoInt T = 1
 
-pValueOr :: PValue -> PValue -> PValue
-pValueOr T _ = T
-pValueOr _ T = T
-pValueOr U _ = U
-pValueOr _ U = U
-pValueOr F F = F
+intToTruthValue :: Int -> TruthValue
+intToTruthValue (-1) = F
+intToTruthValue 0 = U
+intToTruthValue 1 = T
 
-pValueAnd :: PValue -> PValue -> PValue
-pValueAnd F _ = F
-pValueAnd _ F = F
-pValueAnd U _ = U
-pValueAnd _ U = U
-pValueAnd T T = T
+orCNF :: TruthValue -> TruthValue -> TruthValue
+orCNF a b = intToTruthValue $ max (truthValuetoInt a) (truthValuetoInt b)
 
--- | Evaluate a literal given the valuation
-evalLiteral :: Valuation -> Literal -> PValue
-evalLiteral v l
-    | l > 0     = v V.! (l - 1)
-    | l < 0     = pValueNot (v V.! (-l - 1))
-    | otherwise = error "Invalid literal"
+andCNF :: TruthValue -> TruthValue -> TruthValue
+andCNF a b = intToTruthValue $ min (truthValuetoInt a) (truthValuetoInt b)
 
--- | Evaluate a conjunctive clause 
-evalClause :: Valuation -> Clause -> PValue
-evalClause v c = foldl pValueOr F (map (evalLiteral v) c)
+notCNF :: TruthValue -> TruthValue
+notCNF a = intToTruthValue $ -(truthValuetoInt a)
 
--- | Evaluate a CNF formula
-evalForm :: Valuation -> FormCNF -> PValue
-evalForm v f = foldl pValueAnd T (map (evalClause v) f)
+-- | Evaluate a literal given a valuation
+evalLiteral :: Valuation -> Literal -> TruthValue
+evalLiteral v l =
+    if l > 0
+        then v V.! (literalIndex l)
+        else notCNF (v V.! (literalIndex l))
 
-c1 :: Clause 
-c1 = [1, 2]
+-- | Literal index inside the valuation `list`
+literalIndex :: Literal -> Int
+literalIndex l = (if l > 0 then l else -l) - 1
+
+literalSubindex :: Literal -> Int
+literalSubindex l = 1 + literalIndex l
+
+-- | True if the literal has some truth value assigned
+-- | inside the valuation, otherwise False
+isValuated :: Valuation -> Literal -> Bool
+isValuated v l = not $ (evalLiteral v l) == U
+
+-- | Evaluate a CNF clause (disjunctive formula) given a valuation
+evalClause :: Valuation -> Clause -> TruthValue
+evalClause v c = foldl (\t l -> orCNF (evalLiteral v l) t) F c
+
+isUnitClause :: Valuation -> Clause -> Bool
+isUnitClause v c = (== 1) $ length $ filter (not . (== F) . evalLiteral v) c
+
+-- | Max literal index in clause
+maxLiteralInClause :: Clause -> Int
+maxLiteralInClause c = foldl (\n l -> max n (literalSubindex l)) 0 c
+
+-- | Evaluate a CNF formula (conjunctive formula) given a valuation
+evalFormula :: Valuation -> Formula -> TruthValue
+evalFormula v f = foldl (\t c -> andCNF (evalClause v c) t) T f
+
+hasUnitClauses :: Valuation -> Formula -> Bool
+hasUnitClauses v f = (> 0) $ length $ filter (isUnitClause v) f
+
+maxLiteralInFormula :: Formula -> Int
+maxLiteralInFormula f = foldl (\l c -> max (maxLiteralInClause c) l) 0 f
+
+-- | Empty valuation given a formula
+emptyValuation :: Formula -> Valuation
+emptyValuation f = V.fromList $ map (\_ -> U) [1..maxLiteral]
+  where maxLiteral = maxLiteralInFormula f
+
+isSatisfiable :: Formula -> Bool
+isSatisfiable f =
+    let v = emptyValuation f
+    in isSatisfiable' v f 0 F || isSatisfiable' v f 0 T
+
+isSatisfiable' :: Valuation -> Formula -> Int -> TruthValue -> Bool
+isSatisfiable' v f i t =
+    let nv = v V.// [(i, t)]
+        truthValue = evalFormula nv f
+        (Just nextVariable) = V.findIndex (\t -> t == U) nv
+        leftBranch = isSatisfiable' nv f nextVariable F
+        rightBranch = isSatisfiable' nv f nextVariable T
+        variablesRemaining = length $ V.filter (\v -> v == U) nv
+    in case () of
+      _ | truthValue == T -> True
+        | truthValue == F -> False
+        | otherwise       ->
+            if variablesRemaining > 0
+                then leftBranch || rightBranch
+                else True
+
+c1 :: Clause
+c1 = [1, 3]
 
 c2 :: Clause
-c2 = [-1, -2]
+c2 = [1, -3]
 
-f :: FormCNF
-f = [c1, c2]
+c3 :: Clause
+c3 = [-1, 3]
 
-getUnits :: FormCNF -> [Literal]
-getUnits f = filter (\c -> 1 == length c) f
+c4 :: Clause
+c4 = [-1, -3]
 
--- Literal Tree
-
-data LTree a = Node a (LTree a) (LTree a)
-             | Empty deriving (Show)
-
--- | Generate a literal tree given an array of trees
-genLTree :: [Literal] -> LTree Literal
-genLTree ls = foldl appendRoot Empty ls
-
-appendRoot :: LTree Literal -> Literal -> LTree Literal
-appendRoot t l = Node l t t
-
--- | Get the left branch, taking the false path
-falseBranch :: LTree Literal -> LTree Literal
-falseBranch Empty        = Empty
-falseBranch (Node a b c) = c
-
--- | Get the right branch, taking the true path
-trueBranch :: LTree Literal -> LTree Literal
-trueBranch Empty        = Empty
-trueBranch (Node a b c) = c
-
+f :: Formula
+f = [c1, c2, c3, c4]
