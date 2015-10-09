@@ -1,6 +1,8 @@
 
 import qualified Data.Vector as V
-
+import qualified System.Environment as SE
+import qualified Data.List.Split as Split
+import qualified Data.List as List
 
 type Literal = Int
 type Clause = [Literal]
@@ -26,85 +28,122 @@ andCNF :: TruthValue -> TruthValue -> TruthValue
 andCNF a b = intToTruthValue $ min (truthValuetoInt a) (truthValuetoInt b)
 
 notCNF :: TruthValue -> TruthValue
-notCNF a = intToTruthValue $ -(truthValuetoInt a)
-
--- | Evaluate a literal given a valuation
-evalLiteral :: Valuation -> Literal -> TruthValue
-evalLiteral v l =
-    if l > 0
-        then v V.! (literalIndex l)
-        else notCNF (v V.! (literalIndex l))
+notCNF a = case a of
+    F -> T
+    U -> U
+    T -> F
 
 -- | Literal index inside the valuation `list`
 literalIndex :: Literal -> Int
-literalIndex l = (if l > 0 then l else -l) - 1
-
-literalSubindex :: Literal -> Int
-literalSubindex l = 1 + literalIndex l
-
--- | True if the literal has some truth value assigned
--- | inside the valuation, otherwise False
-isValuated :: Valuation -> Literal -> Bool
-isValuated v l = not $ (evalLiteral v l) == U
-
--- | Evaluate a CNF clause (disjunctive formula) given a valuation
-evalClause :: Valuation -> Clause -> TruthValue
-evalClause v c = foldl (\t l -> orCNF (evalLiteral v l) t) F c
-
-isUnitClause :: Valuation -> Clause -> Bool
-isUnitClause v c = (== 1) $ length $ filter (not . (== F) . evalLiteral v) c
+literalIndex l
+    | l > 0     = l - 1
+    | l < 0     = -(l + 1)
+    | otherwise = 0
 
 -- | Max literal index in clause
 maxLiteralInClause :: Clause -> Int
-maxLiteralInClause c = foldl (\n l -> max n (literalSubindex l)) 0 c
-
--- | Evaluate a CNF formula (conjunctive formula) given a valuation
-evalFormula :: Valuation -> Formula -> TruthValue
-evalFormula v f = foldl (\t c -> andCNF (evalClause v c) t) T f
-
-hasUnitClauses :: Valuation -> Formula -> Bool
-hasUnitClauses v f = (> 0) $ length $ filter (isUnitClause v) f
+maxLiteralInClause c = foldl (\p l -> max ((literalIndex l) + 1) p) 0 c
 
 maxLiteralInFormula :: Formula -> Int
 maxLiteralInFormula f = foldl (\l c -> max (maxLiteralInClause c) l) 0 f
 
+-- | Evaluate a literal given a valuation
+-- | If literal is not defined in the valuation, it returns undefined
+evalLiteral :: Valuation -> Literal -> TruthValue
+evalLiteral v l =
+    let value = do
+        i <- Just (literalIndex l)
+        t <- v V.!? i
+        return (if l > 0 then t else notCNF t)
+    in case value of
+        Nothing -> U
+        Just x  -> x
+
+-- | Evaluate a CNF clause (disjunctive formula) given a valuation
+evalClause :: Valuation -> Clause -> TruthValue
+evalClause v c = foldl (\p literal -> orCNF p (evalLiteral v literal)) F c
+
+-- | Evaluate a CNF formula (conjunctive formula) given a valuation
+evalFormula :: Valuation -> Formula -> TruthValue
+evalFormula v form =
+    let f p clause = andCNF p (evalClause v clause)
+    in foldl f T form
+
+-- | True if the literal has some truth value assigned
+-- | inside the valuation, otherwise False
+isValuated :: Valuation -> Literal -> Bool
+isValuated v l = evalLiteral v l /= U
+
+isUnitClause :: Valuation -> Clause -> Bool
+isUnitClause v c =
+  let f t = (/= F) $ (evalLiteral v t)
+  in (== 1) $ length $ filter f c
+
+unitClauseLiteral :: Valuation -> Clause -> Maybe Int
+unitClauseLiteral v c =
+    let truthValue t = evalLiteral v t
+        literals = filter ((/= F) . truthValue) c
+        size = length literals
+    in if (length literals) == 1
+        then Just (head literals)
+        else Nothing
+
+undecidedClauses :: Valuation -> Formula -> Formula
+undecidedClauses v f = filter (\x -> (evalClause v x) /= T) f
+
+formUnitClauseLiterals :: Valuation -> Formula -> [Maybe Int]
+formUnitClauseLiterals v f = filter (\x -> x /= Nothing) $ map (unitClauseLiteral v) f
+
 -- | Empty valuation given a formula
+-- | ensures to map every variable with F, U or T
 emptyValuation :: Formula -> Valuation
 emptyValuation f = V.fromList $ map (\_ -> U) [1..maxLiteral]
   where maxLiteral = maxLiteralInFormula f
 
 isSatisfiable :: Formula -> Bool
 isSatisfiable f =
-    let v = emptyValuation f
-    in isSatisfiable' v f 0 F || isSatisfiable' v f 0 T
+    let valuation = emptyValuation f
+    in isSatisfiable' valuation f 0 F || isSatisfiable' valuation f 0 T
 
 isSatisfiable' :: Valuation -> Formula -> Int -> TruthValue -> Bool
 isSatisfiable' v f i t =
-    let nv = v V.// [(i, t)]
-        truthValue = evalFormula nv f
-        (Just nextVariable) = V.findIndex (\t -> t == U) nv
-        leftBranch = isSatisfiable' nv f nextVariable F
-        rightBranch = isSatisfiable' nv f nextVariable T
-        variablesRemaining = length $ V.filter (\v -> v == U) nv
-    in case () of
-      _ | truthValue == T -> True
-        | truthValue == F -> False
-        | otherwise       ->
-            if variablesRemaining > 0
-                then leftBranch || rightBranch
-                else True
+    let valuation = v V.// [(i, t)]
+        reducedFormula = undecidedClauses valuation f
+        unitLiterals = formUnitClauseLiterals valuation reducedFormula
+        nextVariable = case unitLiterals of
+            []     -> V.findIndex (\x -> x == U) valuation
+            (l:ls) -> l
+    in case evalFormula valuation reducedFormula of
+        T -> True
+        F -> False
+        _ -> case nextVariable of
+            Nothing -> error "No vars"
+            Just x  -> isSatisfiable' valuation reducedFormula (literalIndex x) F || isSatisfiable' valuation reducedFormula (literalIndex x) T
+
+
+-- TESTING PURPOUSE --
 
 c1 :: Clause
-c1 = [1, 3]
+c1 = [1, 2]
 
 c2 :: Clause
-c2 = [1, -3]
+c2 = [1, -2]
 
 c3 :: Clause
-c3 = [-1, 3]
+c3 = [-1, 2]
 
 c4 :: Clause
-c4 = [-1, -3]
+c4 = [-1, -2]
 
 f :: Formula
 f = [c1, c2, c3, c4]
+
+main = do
+    args <- SE.getArgs
+    content <- readFile (args !! 0)
+    ls <- return (Prelude.lines content)
+    putStr $ show $ isSatisfiable $ getFormula (tail ls)
+    return ()
+  where getFormula ls = map lineToClause ls
+
+lineToClause line = filter (\x -> x /= 0) $ map (\x -> read x :: Int) $ (Split.splitOn " " line)
