@@ -38,7 +38,7 @@ literalIndex :: Literal -> Int
 literalIndex l
     | l > 0     = l - 1
     | l < 0     = -(l + 1)
-    | otherwise = 0
+    | otherwise = error "Invalid literal: can't have 0 as a literal index"
 
 -- | Max literal index in clause
 maxLiteralInClause :: Clause -> Int
@@ -111,23 +111,24 @@ isSatisfiable' v f i t =
         reducedFormula = undecidedClauses valuation f
         unitLiterals = formUnitClauseLiterals valuation reducedFormula
         nextVariable = case unitLiterals of
-            []     -> V.findIndex (\x -> x == U) valuation
-            (l:ls) -> l
-    in case evalFormula valuation reducedFormula of
+            []            -> V.findIndex (\x -> x == U) valuation
+            ((Just l):ls) -> Just (literalIndex l)
+        truthValue = evalFormula valuation reducedFormula
+    in case truthValue of
         T -> True
         F -> False
         _ -> case nextVariable of
             Nothing -> error "No vars"
-            Just x  -> isSatisfiable' valuation reducedFormula (literalIndex x) F || isSatisfiable' valuation reducedFormula (literalIndex x) T
+            Just x  -> isSatisfiable' valuation reducedFormula x F || isSatisfiable' valuation reducedFormula x T
 
 
 -- TESTING PURPOUSE --
 
 c1 :: Clause
-c1 = [1, 2]
+c1 = [1, 2, 3]
 
 c2 :: Clause
-c2 = [1, -2]
+c2 = [1, -2, 3]
 
 c3 :: Clause
 c3 = [-1, 2]
@@ -136,7 +137,7 @@ c4 :: Clause
 c4 = [-1, -2]
 
 f :: Formula
-f = [c1, c2, c3, c4]
+f = [c1]
 
 main = do
     args <- SE.getArgs
