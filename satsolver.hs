@@ -100,11 +100,14 @@ emptyValuation :: Formula -> Valuation
 emptyValuation f = V.fromList $ map (\_ -> U) [1..maxLiteral]
   where maxLiteral = maxLiteralInFormula f
 
+-- | Function to get satisfiability of a formula
 isSatisfiable :: Formula -> Bool
 isSatisfiable f =
     let valuation = emptyValuation f
     in isSatisfiable' valuation f 0 F || isSatisfiable' valuation f 0 T
 
+-- | Auxiliar function that decides whether a formula is satisfiable
+-- | with a given partial valuation and a new truth value to an indexed variable
 isSatisfiable' :: Valuation -> Formula -> Int -> TruthValue -> Bool
 isSatisfiable' v f i t =
     let valuation = v V.// [(i, t)]
